@@ -98,8 +98,8 @@ import static javax.servlet.http.HttpServletResponse.*;
  */
 public abstract class EC2Cloud extends Cloud {
 
-	public static final String DEFAULT_EC2_HOST = "us-east-1";
-	public static final String EC2_URL_HOST = "ec2.amazonaws.com";
+    public static final String DEFAULT_EC2_HOST = "us-east-1";
+    public static final String EC2_URL_HOST = "ec2.amazonaws.com";
 
 	private final boolean useInstanceProfileForCredentials;
     private final String accessId;
@@ -115,7 +115,7 @@ public abstract class EC2Cloud extends Cloud {
 
     protected transient AmazonEC2 connection;
 
-    private static AWSCredentialsProvider awsCredentialsProvider;
+    private static AWSCredentials awsCredentials;
 
     /* Track the count per-AMI identifiers for AMIs currently being
      * provisioned, but not necessarily reported yet by Amazon.
@@ -135,7 +135,7 @@ public abstract class EC2Cloud extends Cloud {
             this.templates=templates;
         }
 
-        if(instanceCapStr.equals("")) {
+        if(StringUtils.isEmpty(instanceCapStr)) {
             this.instanceCap = Integer.MAX_VALUE;
         } else {
             this.instanceCap = Integer.parseInt(instanceCapStr);
@@ -357,27 +357,27 @@ public abstract class EC2Cloud extends Cloud {
     }
 
     @Override
-	public Collection<PlannedNode> provision(Label label, int excessWorkload) {
+    public Collection<PlannedNode> provision(Label label, int excessWorkload) {
         try {
             // Count number of pending executors from spot requests
-			for(EC2SpotSlave n : NodeIterator.nodes(EC2SpotSlave.class)){
-				// If the slave is online then it is already counted by Jenkins
-				// We only want to count potential additional Spot instance slaves
-				if (n.getComputer().isOffline() && label.matches(n.getAssignedLabels())){
-					DescribeSpotInstanceRequestsRequest dsir =
-							new DescribeSpotInstanceRequestsRequest().withSpotInstanceRequestIds(n.getSpotInstanceRequestId());
+            for(EC2SpotSlave n : NodeIterator.nodes(EC2SpotSlave.class)){
+                // If the slave is online then it is already counted by Jenkins
+                // We only want to count potential additional Spot instance slaves
+                if (n.getComputer().isOffline()){
+                    DescribeSpotInstanceRequestsRequest dsir =
+                            new DescribeSpotInstanceRequestsRequest().withSpotInstanceRequestIds(n.getSpotInstanceRequestId());
 
-					for(SpotInstanceRequest sir : connect().describeSpotInstanceRequests(dsir).getSpotInstanceRequests()) {
-						// Count Spot requests that are open and still have a chance to be active
-						// A request can be active and not yet registered as a slave. We check above
-						// to ensure only unregistered slaves get counted
-						if(sir.getState().equals("open") || sir.getState().equals("active")){
-							excessWorkload -= n.getNumExecutors();
-						}
-					}
-				}
-			}
-			LOGGER.log(Level.INFO, "Excess workload after pending Spot instances: " + excessWorkload);
+                    for(SpotInstanceRequest sir : connect().describeSpotInstanceRequests(dsir).getSpotInstanceRequests()) {
+                        // Count Spot requests that are open and still have a chance to be active
+                        // A request can be active and not yet registered as a slave. We check above
+                        // to ensure only unregistered slaves get counted
+                        if(sir.getState().equals("open") || sir.getState().equals("active")){
+                            excessWorkload -= n.getNumExecutors();
+                        }
+                    }
+                }
+            }
+            LOGGER.log(Level.INFO, "Excess workload after pending Spot instances: " + excessWorkload);
 
             List<PlannedNode> r = new ArrayList<PlannedNode>();
 
@@ -427,7 +427,7 @@ public abstract class EC2Cloud extends Cloud {
     }
 
     @Override
-	public boolean canProvision(Label label) {
+    public boolean canProvision(Label label) {
         return getTemplate(label)!=null;
     }
 
@@ -471,8 +471,16 @@ public abstract class EC2Cloud extends Cloud {
      * Connect to an EC2 instance.
      * @return {@link AmazonEC2} client
      */
-    public synchronized static AmazonEC2 connect(AWSCredentialsProvider credentialsProvider, URL endpoint) {
-        awsCredentialsProvider = credentialsProvider;
+    public static AmazonEC2 connect(String accessId, String secretKey, URL endpoint) {
+        return connect(accessId, Secret.fromString(secretKey), endpoint);
+    }
+
+    /***
+     * Connect to an EC2 instance.
+     * @return {@link AmazonEC2} client
+     */
+    public synchronized static AmazonEC2 connect(String accessId, Secret secretKey, URL endpoint) {
+        awsCredentials = new BasicAWSCredentials(accessId, Secret.toString(secretKey));
         ClientConfiguration config = new ClientConfiguration();
         ProxyConfiguration proxyConfig = Jenkins.getInstance().proxy;
         Proxy proxy = proxyConfig == null ? Proxy.NO_PROXY : proxyConfig.createProxy(endpoint.getHost());
@@ -605,8 +613,8 @@ public abstract class EC2Cloud extends Cloud {
             }
         }
 
-        public FormValidation doGenerateKey(StaplerResponse rsp, URL ec2EndpointUrl, boolean useInstanceProfileForCredentials, String accessId, String secretKey)
-        		throws IOException, ServletException {
+        public FormValidation doGenerateKey(StaplerResponse rsp, URL ec2EndpointUrl, String accessId, String secretKey)
+                throws IOException, ServletException {
             try {
                 AWSCredentialsProvider credentialsProvider = createCredentialsProvider(useInstanceProfileForCredentials, accessId, secretKey);
                 AmazonEC2 ec2 = connect(credentialsProvider, ec2EndpointUrl);

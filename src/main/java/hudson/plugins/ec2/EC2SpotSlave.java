@@ -1,10 +1,16 @@
 package hudson.plugins.ec2;
 
+import hudson.Extension;
+import hudson.model.Descriptor.FormException;
+import hudson.slaves.NodeProperty;
+
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import jenkins.model.Jenkins;
 
 import org.kohsuke.stapler.DataBoundConstructor;
 
@@ -15,25 +21,19 @@ import com.amazonaws.services.ec2.model.CancelSpotInstanceRequestsRequest;
 import com.amazonaws.services.ec2.model.DescribeSpotInstanceRequestsRequest;
 import com.amazonaws.services.ec2.model.DescribeSpotInstanceRequestsResult;
 import com.amazonaws.services.ec2.model.SpotInstanceRequest;
-import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
-
-import hudson.Extension;
-import hudson.model.Hudson;
-import hudson.model.Descriptor.FormException;
-import hudson.slaves.NodeProperty;
 
 public final class EC2SpotSlave extends EC2AbstractSlave {
 
 	private final String spotInstanceRequestId;
 
-	public EC2SpotSlave(String name, String spotInstanceRequestId, String description, String remoteFS, int numExecutors, Mode mode, String initScript, String tmpDir, String labelString, String remoteAdmin, String jvmopts, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, int launchTimeout, AMITypeData amiType) throws FormException, IOException {
-		this(name, spotInstanceRequestId, description, remoteFS, numExecutors, mode, initScript, tmpDir, labelString, Collections.<NodeProperty<?>>emptyList(), remoteAdmin, jvmopts, idleTerminationMinutes, tags, cloudName, usePrivateDnsName, launchTimeout, amiType);
+	public EC2SpotSlave(String name, String spotInstanceRequestId, String description, String remoteFS, int numExecutors, Mode mode, String initScript, String labelString, String remoteAdmin, String jvmopts, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, int launchTimeout, AMITypeData amiType, boolean rebootAfterBuild, boolean useJnlp) throws FormException, IOException {
+		this(name, spotInstanceRequestId, description, remoteFS, numExecutors, mode, initScript, labelString, Collections.<NodeProperty<?>>emptyList(), remoteAdmin, jvmopts, idleTerminationMinutes, tags, cloudName, usePrivateDnsName, launchTimeout, amiType, rebootAfterBuild, useJnlp);
 	}
 
 	@DataBoundConstructor
-	public EC2SpotSlave(String name, String spotInstanceRequestId, String description, String remoteFS, int numExecutors, Mode mode, String initScript, String tmpDir, String labelString, List<? extends NodeProperty<?>> nodeProperties, String remoteAdmin, String jvmopts, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, int launchTimeout, AMITypeData amiType) throws FormException, IOException {
+	public EC2SpotSlave(String name, String spotInstanceRequestId, String description, String remoteFS, int numExecutors, Mode mode, String initScript, String labelString, List<? extends NodeProperty<?>> nodeProperties, String remoteAdmin, String jvmopts, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, int launchTimeout, AMITypeData amiType, boolean rebootAfterBuild, boolean useJnlp) throws FormException, IOException {
 
-		super(name, "", description, remoteFS, numExecutors, mode, labelString, new EC2SpotComputerLauncher(), new EC2SpotRetentionStrategy(idleTerminationMinutes), initScript, tmpDir, nodeProperties, remoteAdmin, jvmopts, false, idleTerminationMinutes, tags, cloudName, usePrivateDnsName, false, launchTimeout, amiType);
+		super(name, "", description, remoteFS, numExecutors, mode, labelString, new EC2SpotComputerLauncher(), new EC2SpotRetentionStrategy(idleTerminationMinutes), initScript, nodeProperties, remoteAdmin, jvmopts, false, idleTerminationMinutes, tags, cloudName, usePrivateDnsName, false, launchTimeout, amiType, rebootAfterBuild, useJnlp);
 		this.name = name;
 		this.spotInstanceRequestId = spotInstanceRequestId;
 	}
@@ -62,11 +62,8 @@ public final class EC2SpotSlave extends EC2AbstractSlave {
 					/* The node has been killed externally, so we've nothing to do here */
 					LOGGER.info("EC2 instance already terminated: "+instanceId);
 				} else{
-					TerminateInstancesRequest request = new TerminateInstancesRequest(Collections.singletonList(instanceId));
-					ec2.terminateInstances(request);
-					LOGGER.info("Terminated EC2 instance (terminated): "+instanceId);
+					terminateInstance();
 				}
-
 			}
 
 		} catch (AmazonServiceException e){
@@ -78,7 +75,7 @@ public final class EC2SpotSlave extends EC2AbstractSlave {
 		}
 
 		try{
-			Hudson.getInstance().removeNode(this);
+			Jenkins.getInstance().removeNode(this);
 		} catch (IOException e){
 			LOGGER.log(Level.WARNING,"Failed to remove slave: "+name, e);
 		}

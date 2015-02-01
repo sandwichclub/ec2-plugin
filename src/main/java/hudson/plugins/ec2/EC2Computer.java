@@ -24,12 +24,17 @@
 package hudson.plugins.ec2;
 
 import hudson.Util;
+import hudson.model.OneOffExecutor;
+import hudson.model.Executor;
+import hudson.model.Queue.Task;
 import hudson.slaves.SlaveComputer;
+
 import java.io.IOException;
 import java.util.Collections;
 
 import org.kohsuke.stapler.HttpRedirect;
 import org.kohsuke.stapler.HttpResponse;
+
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.ec2.AmazonEC2;
@@ -191,4 +196,33 @@ public class EC2Computer extends SlaveComputer {
 		}
 	}
 
+    /* (non-Javadoc)
+     * @see hudson.slaves.SlaveComputer#taskCompleted(hudson.model.Executor, hudson.model.Queue.Task, long)
+     */
+    @Override
+    public void taskCompleted(Executor executor, Task task, long durationMS)
+    {
+        super.taskCompleted(executor, task, durationMS);
+        rebootIfAppropriate(executor, task);
+    }
+
+    /* (non-Javadoc)
+     * @see hudson.slaves.SlaveComputer#taskCompletedWithProblems(hudson.model.Executor, hudson.model.Queue.Task, long, java.lang.Throwable)
+     */
+    @Override
+    public void taskCompletedWithProblems(Executor executor, Task task, long durationMS, Throwable problems)
+    {
+        super.taskCompletedWithProblems(executor, task, durationMS, problems);
+        rebootIfAppropriate(executor, task);
+    }
+
+    private void rebootIfAppropriate(Executor executor, Task task)
+    {
+        EC2AbstractSlave node = getNode();
+        if (node.rebootAfterBuild && !(executor instanceof OneOffExecutor)) {
+            if (node != null) {
+                node.reboot();
+            }
+        }
+    }
 }

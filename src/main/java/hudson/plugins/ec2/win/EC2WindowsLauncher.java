@@ -1,7 +1,6 @@
 package hudson.plugins.ec2.win;
 
 import hudson.model.Descriptor;
-import hudson.model.Hudson;
 import hudson.plugins.ec2.EC2Computer;
 import hudson.plugins.ec2.EC2ComputerLauncher;
 import hudson.plugins.ec2.win.winrm.WindowsProcess;
@@ -14,6 +13,10 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.concurrent.TimeUnit;
 
+import jenkins.model.Jenkins;
+import jenkins.slaves.JnlpSlaveAgentProtocol;
+
+import org.apache.commons.httpclient.URI;
 import org.apache.commons.io.IOUtils;
 
 import com.amazonaws.AmazonClientException;
@@ -53,22 +56,57 @@ public class EC2WindowsLauncher extends EC2ComputerLauncher {
                 initGuard.write("init ran".getBytes());
                 logger.println("init script failed ran successfully");
             }
-
             
-            OutputStream slaveJar = connection.putFile(tmpDir + "slave.jar");
-            slaveJar.write(Hudson.getInstance().getJnlpJars("slave.jar").readFully());
+            OutputStream slaveJar = connection.putFile("C:\\Windows\\Temp\\slave.jar");
+            try {
+                slaveJar.write(Jenkins.getInstance().getJnlpJars("slave.jar").readFully());
+            }
+            finally {
+                slaveJar.close();
+            }
+            logger.println("slave.jar file successfully sent");
 
-            logger.println("slave.jar sent remotely. Bootstrapping it");
+            boolean useJnlp = computer.getNode().useJnlp;
+            String jvmOpts = computer.getNode().jvmopts;
+            if (jvmOpts == null) {
+                jvmOpts = "";
+            }
+            if (useJnlp) {
+                jvmOpts += " -Xrs";
+            }
+            String launchString = "java " + jvmOpts + " -jar C:\\Windows\\Temp\\slave.jar -slaveLog C:\\Windows\\Temp\\slave.log";
+            if (useJnlp) {
+                String nodeName = computer.getNode().getNodeName();
+                String slaveSecret = JnlpSlaveAgentProtocol.SLAVE_SECRET.mac(computer.getNode().getNodeName());
+                launchString += " -noReconnect -jnlpUrl \""
+                                + new URI(Jenkins.getInstance().getRootUrl() + "computer/" + nodeName + "/slave-agent.jnlp",
+                                        false, "UTF-8") + "\"" + " -secret \"" + slaveSecret + "\"";
+                logger.println("Launching slave agent: " + launchString.replace(slaveSecret, "********"));
+            }
+            else {
+                logger.println("Launching slave agent: " + launchString);
+            }
             
-            final String jvmopts = computer.getNode().jvmopts;
-            final WindowsProcess process = connection.execute("java " + (jvmopts != null ? jvmopts : "") + " -jar " + tmpDir + "slave.jar", 86400);
-            computer.setChannel(process.getStdout(), process.getStdin(), logger, new Listener() {
-                @Override
-                public void onClosed(Channel channel, IOException cause) {
-                    process.destroy();
-                    connection.close();
+            final WindowsProcess process = connection.execute(launchString, 86400);
+            if (useJnlp) {
+                process.destroy(); // Destroying WinRM shell, java is -Xrs and should stay running
+                logger.println("Waiting for JNLP agent to connect");
+                while (computer.getChannel() == null) {
+                    Thread.sleep(1000);
                 }
-            });
+                logger.println("JNLP agent connected");
+                // Connection is closed in finally
+            }
+            else {
+                computer.setChannel(process.getStdout(), process.getStdin(), logger, new Listener() {
+                    @Override
+                    public void onClosed(Channel channel, IOException cause)
+                    {
+                        process.destroy();
+                        // Connection is already closed
+                    }
+                });
+            }
         } catch (Throwable ioe) {
             logger.println("Ouch:");
             ioe.printStackTrace(logger);

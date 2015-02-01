@@ -55,20 +55,24 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
             final String baseMsg = "Node " + computer.getName() + "("+computer.getInstanceId()+")";
             String msg;
 
-            OUTER:
-            while(true) {
-                switch (computer.getState()) {
+            boolean continuePolling = true;
+            while(continuePolling) {
+                InstanceState state = computer.getState();
+                switch (state) {
                     case PENDING:
-                        msg = baseMsg + " is still pending/launching, waiting 5s";
-                        break;
                     case STOPPING:
-                        msg = baseMsg + " is still stopping, waiting 5s";
+                        msg = baseMsg + " is still " + state.toString().toLowerCase() + ", waiting 5s";
+                        Thread.sleep(5000); // check every 5 secs
+                        // and report to system log and console
+                        LOGGER.finest(msg);
+                        logger.println(msg);
                         break;
                     case RUNNING:
                         msg = baseMsg + " is ready";
                         LOGGER.finer(msg);
                         logger.println(msg);
-                        break OUTER;
+                        continuePolling = false;
+                        break;
                     case STOPPED:
                         msg = baseMsg + " is stopped, sending start request";
                         LOGGER.finer(msg);
@@ -84,7 +88,7 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
                         msg = baseMsg + ": sent start request, result: " + siResult;
                         LOGGER.finer(baseMsg);
                         logger.println(baseMsg);
-                        continue OUTER;
+                        break;
                     case SHUTTING_DOWN:
                     case TERMINATED:
                         // abort

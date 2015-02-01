@@ -26,10 +26,8 @@ package hudson.plugins.ec2.ssh;
 import hudson.Util;
 import hudson.ProxyConfiguration;
 import hudson.model.Descriptor;
-import hudson.model.Hudson;
-import hudson.plugins.ec2.EC2ComputerLauncher;
-import hudson.plugins.ec2.EC2Cloud;
 import hudson.plugins.ec2.EC2Computer;
+import hudson.plugins.ec2.EC2ComputerLauncher;
 import hudson.remoting.Channel;
 import hudson.remoting.Channel.Listener;
 import hudson.slaves.ComputerLauncher;
@@ -41,7 +39,9 @@ import java.net.Proxy;
 import java.net.URL;
 
 import jenkins.model.Jenkins;
+import jenkins.slaves.JnlpSlaveAgentProtocol;
 
+import org.apache.commons.httpclient.URI;
 import org.apache.commons.io.IOUtils;
 
 import com.amazonaws.AmazonClientException;
@@ -137,8 +137,9 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
             // TODO: parse the version number. maven-enforcer-plugin might help
             logger.println("Verifying that java exists");
             if(conn.exec("java -fullversion", logger) !=0) {
-                logger.println("Installing Java");
-
+                logger.println("Java not found. Installing Java...");
+                
+                
                 String jdk = "java1.6.0_12";
                 String path = "/hudson-ci/jdk/linux-i586/" + jdk + ".tgz";
 
@@ -163,26 +164,61 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
             // bug in ec2-sshd?
 
             logger.println("Copying slave.jar");
-            scp.put(Hudson.getInstance().getJnlpJars("slave.jar").readFully(),
-                    "slave.jar",tmpDir);
+            scp.put(Jenkins.getInstance().getJnlpJars("slave.jar").readFully(),
+                    "slave.jar","/tmp");
+            logger.println("slave.jar copied");
 
-            String jvmopts = computer.getNode().jvmopts;
-            String launchString = "java " + (jvmopts != null ? jvmopts : "") + " -jar " + tmpDir + "/slave.jar";
-            logger.println("Launching slave agent: " + launchString);
+            boolean useJnlp = computer.getNode().useJnlp;
+            String jvmOpts = computer.getNode().jvmopts;
+            if (jvmOpts == null) {
+                jvmOpts = "";
+            }
+            if (useJnlp) {
+                jvmOpts += " -Xrs";
+            }
+            String launchString = "java " + jvmOpts + " -jar /tmp/slave.jar -slaveLog /tmp/slave.log";
+            if (useJnlp) {
+                String nodeName = computer.getNode().getNodeName();
+                String slaveSecret = JnlpSlaveAgentProtocol.SLAVE_SECRET.mac(computer.getNode().getNodeName());
+                launchString +=
+                        " -noReconnect -jnlpUrl '"
+                                + new URI(Jenkins.getInstance().getRootUrl() + "computer/" + nodeName + "/slave-agent.jnlp",
+                                        false, "UTF-8") + "'" + " -secret '" + slaveSecret + "'"
+                                + " >/tmp/slave-stdout.log 2>/tmp/slave-stderr.log";
+                logger.println("Launching slave agent: " + launchString.replace(slaveSecret, "********"));
+            }
+            else {
+                logger.println("Launching slave agent: " + launchString);
+            }
             final Session sess = conn.openSession();
             sess.execCommand(launchString);
-            computer.setChannel(sess.getStdout(),sess.getStdin(),logger,new Listener() {
-                @Override
-				public void onClosed(Channel channel, IOException cause) {
-                    sess.close();
-                    conn.close();
+            if (useJnlp) {
+                sess.close();
+                conn.close();
+                cleanupConn = null;
+                logger.println("Waiting for JNLP agent to connect");
+                while (computer.getChannel() == null) {
+                    Thread.sleep(1000);
                 }
-            });
-            
-            successful = true;
-        } finally {
-            if(cleanupConn != null && !successful)
+                logger.println("JNLP agent connected");
+            }
+            else {
+                computer.setChannel(sess.getStdout(), sess.getStdin(), logger, new Listener() {
+                    @Override
+                    public void onClosed(Channel channel, IOException cause)
+                    {
+                        sess.close();
+                        conn.close();
+                    }
+                });
+
+                successful = true;
+            }
+        }
+        finally {
+            if (cleanupConn != null && !successful) {
                 cleanupConn.close();
+            }
         }
     }
 
